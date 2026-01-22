@@ -1,0 +1,10 @@
+project_id = "ryakvsbdkmnkoastchrf"
+
+[functions.cloudinary-upload]
+verify_jwt = false
+
+[functions.content-moderation]
+verify_jwt = false
+
+[functions.send-push-notification]
+verify_jwt = false
