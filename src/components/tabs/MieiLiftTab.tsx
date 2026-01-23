@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, forwardRef } from "react";
 import { cn } from "@/lib/utils";
-import { MessageCircle, Info, Trash2, Edit2, X, Star, Shield, MapPin, Clock, ChevronLeft, Navigation, Loader2, User, CheckCircle, Check } from "lucide-react";
+import { MessageCircle, Info, Trash2, Edit2, X, Star, Shield, MapPin, Clock, ChevronLeft, Navigation, Loader2, User, Users, CheckCircle, Check, ChevronUp, ChevronDown } from "lucide-react";
 import { ChatView } from "@/components/ChatView";
 import { Task } from "@/components/TaskCard";
 import { toast } from "@/hooks/use-toast";
@@ -10,6 +10,9 @@ import "mapbox-gl/dist/mapbox-gl.css";
 import { supabase } from "@/integrations/supabase/client";
 import { TipPopup } from "@/components/TipPopup";
 import { ReviewPopup } from "@/components/ReviewPopup";
+import { motion, PanInfo } from "framer-motion";
+import { WaitingForLifterView } from "@/components/WaitingForLifterView";
+import { ActiveTaskMapView } from "@/components/ActiveTaskMapView";
 
 const MAPBOX_TOKEN = "pk.eyJ1IjoiYnJ1bmUyMiIsImEiOiJjbWo4Yms2bGQwMHAzM2RyMDlhamxidmFvIn0.I9xGBb5ZCgFC5KtahiI3sA";
 
@@ -32,6 +35,9 @@ interface DBTask {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  lifter_location_lat?: number | null;
+  lifter_location_lng?: number | null;
+  lifter_location_updated_at?: string | null;
 }
 
 interface TaskApplication {
@@ -61,6 +67,8 @@ interface LifterProfile {
   total_reviews: number;
   is_kyc_verified: boolean;
   is_available: boolean;
+  location_lat?: number;
+  location_lng?: number;
 }
 
 const categoryEmojis: Record<string, string> = {
@@ -129,6 +137,9 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
   
   // Unread messages count
   const [unreadCount, setUnreadCount] = useState(0);
+  
+  // Map fullscreen state
+  const [isMapExpanded, setIsMapExpanded] = useState(false);
   
   const mapContainer = useRef<HTMLDivElement>(null);
   const acceptedMapContainer = useRef<HTMLDivElement>(null);
@@ -267,19 +278,54 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
   const scheduledTasks = tasks.filter(t => t.is_scheduled);
   const activeTask = activeTasks[0] || null;
 
-  // Auto-switch to accepted view when task is assigned
+  // Set lifter position from task data when available (NO automatic viewMode switch)
   useEffect(() => {
-    if (activeTask && (activeTask.status === 'accettato' || activeTask.status === 'in_arrivo') && assignedLifterProfile && viewMode === 'list') {
-      // Set lifter position if not already set
-      if (!lifterPosition && activeTask.location_lat && activeTask.location_lng) {
-        setLifterPosition({
-          lat: Number(activeTask.location_lat) + 0.002,
-          lng: Number(activeTask.location_lng) + 0.003,
-        });
-      }
-      setViewMode('accepted');
+    if (!activeTask || activeTask.status === 'in_attesa') return;
+    
+    // Priority: use lifter_location fields on task (most accurate), then profile, then fallback
+    if (activeTask.lifter_location_lat && activeTask.lifter_location_lng) {
+      setLifterPosition({
+        lat: Number(activeTask.lifter_location_lat),
+        lng: Number(activeTask.lifter_location_lng),
+      });
+    } else if (assignedLifterProfile?.location_lat && assignedLifterProfile?.location_lng) {
+      setLifterPosition({
+        lat: Number(assignedLifterProfile.location_lat),
+        lng: Number(assignedLifterProfile.location_lng),
+      });
     }
-  }, [activeTask, assignedLifterProfile, viewMode, lifterPosition]);
+  }, [activeTask?.id, activeTask?.status, activeTask?.lifter_location_lat, activeTask?.lifter_location_lng, assignedLifterProfile?.location_lat, assignedLifterProfile?.location_lng]);
+
+  // Subscribe to task changes for real-time lifter position updates
+  useEffect(() => {
+    if (!activeTask?.id || activeTask.status === 'completato' || activeTask.status === 'in_attesa') return;
+
+    const channel = supabase
+      .channel(`task-lifter-pos-${activeTask.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'tasks',
+          filter: `id=eq.${activeTask.id}`,
+        },
+        (payload: any) => {
+          const updated = payload.new;
+          if (updated.lifter_location_lat && updated.lifter_location_lng) {
+            setLifterPosition({
+              lat: Number(updated.lifter_location_lat),
+              lng: Number(updated.lifter_location_lng),
+            });
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [activeTask?.id, activeTask?.status]);
 
   // Fetch unread messages count
   useEffect(() => {
@@ -440,13 +486,18 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
   // Initialize map for active task (DO NOT re-create on every GPS update)
   const activeTaskIdRef = useRef<string | null>(null);
 
+  // Check if we have enough position data to show the map
+  // Either user position OR task position is sufficient to initialize
+  const taskHasPosition = activeTask?.location_lat != null && activeTask?.location_lng != null;
+  const canShowMap = hasUserPosition || taskHasPosition;
+
   useEffect(() => {
     if (
       tabMode !== "in_corso" ||
       viewMode !== "list" ||
       !activeTask ||
       !mapContainer.current ||
-      !hasUserPosition
+      !canShowMap
     ) {
       return;
     }
@@ -465,7 +516,13 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
 
     mapboxgl.accessToken = MAPBOX_TOKEN;
 
-    const pos = userPosition!;
+    // Use task position as fallback if user position is not available
+    const fallbackPos = { 
+      lat: Number(activeTask.location_lat) || 45.5416, 
+      lng: Number(activeTask.location_lng) || 10.2118 
+    };
+    const pos = userPosition || fallbackPos;
+    
     const { lat: taskLat, lng: taskLng, swapped } = resolveTaskCoords(
       activeTask.location_lat,
       activeTask.location_lng,
@@ -503,24 +560,26 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
     map.current.touchZoomRotate.enable();
     map.current.dragPan.enable();
 
-    // User marker
-    const userMarkerEl = document.createElement("div");
-    userMarkerEl.innerHTML = `
-      <div style="position: relative;">
-        <div style="width: 20px; height: 20px; background: #3b82f6; border: 3px solid white; border-radius: 50%; box-shadow: 0 2px 8px rgba(0,0,0,0.3);"></div>
-        <div style="position: absolute; top: -5px; left: -5px; width: 30px; height: 30px; background: rgba(59, 130, 246, 0.3); border-radius: 50%; animation: pulse 2s infinite;"></div>
-      </div>
-      <style>
-        @keyframes pulse {
-          0% { transform: scale(1); opacity: 1; }
-          100% { transform: scale(2); opacity: 0; }
-        }
-      </style>
-    `;
+    // User marker (only show if we have actual user position)
+    if (userPosition) {
+      const userMarkerEl = document.createElement("div");
+      userMarkerEl.innerHTML = `
+        <div style="position: relative;">
+          <div style="width: 20px; height: 20px; background: #3b82f6; border: 3px solid white; border-radius: 50%; box-shadow: 0 2px 8px rgba(0,0,0,0.3);"></div>
+          <div style="position: absolute; top: -5px; left: -5px; width: 30px; height: 30px; background: rgba(59, 130, 246, 0.3); border-radius: 50%; animation: pulse 2s infinite;"></div>
+        </div>
+        <style>
+          @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            100% { transform: scale(2); opacity: 0; }
+          }
+        </style>
+      `;
 
-    userMarkerRef.current = new mapboxgl.Marker({ element: userMarkerEl })
-      .setLngLat([pos.lng, pos.lat])
-      .addTo(map.current);
+      userMarkerRef.current = new mapboxgl.Marker({ element: userMarkerEl })
+        .setLngLat([userPosition.lng, userPosition.lat])
+        .addTo(map.current);
+    }
 
     // Task marker
     const renderTaskMarker = () => {
@@ -551,9 +610,65 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
 
     renderTaskMarker();
 
-    // Fit bounds once (no animation to avoid zoom jumps)
-    const bounds = new mapboxgl.LngLatBounds().extend([pos.lng, pos.lat]).extend([taskLng, taskLat]);
-    map.current.fitBounds(bounds, { padding: 60, duration: 0 });
+    // Add route line and fetch route info when lifter is assigned
+    map.current.on("load", async () => {
+      if (!map.current) return;
+      
+      const isAssigned = activeTask.status === "accettato" || activeTask.status === "in_arrivo";
+      
+      if (isAssigned && lifterPosition && userPosition) {
+        // Fetch walking route
+        try {
+          const response = await fetch(
+            `https://api.mapbox.com/directions/v5/mapbox/walking/${lifterPosition.lng},${lifterPosition.lat};${userPosition.lng},${userPosition.lat}?geometries=geojson&access_token=${MAPBOX_TOKEN}`
+          );
+          const data = await response.json();
+
+          if (data.routes && data.routes[0]) {
+            const route = data.routes[0];
+            const distance = route.distance < 1000 
+              ? `${Math.round(route.distance)}m` 
+              : `${(route.distance / 1000).toFixed(1)}km`;
+            const duration = `${Math.round(route.duration / 60)} min`;
+            setRouteInfo({ distance, duration });
+
+            // Add route line
+            if (!map.current.getSource("route")) {
+              map.current.addSource("route", {
+                type: "geojson",
+                data: {
+                  type: "Feature",
+                  properties: {},
+                  geometry: route.geometry,
+                },
+              });
+
+              map.current.addLayer({
+                id: "route",
+                type: "line",
+                source: "route",
+                layout: { "line-join": "round", "line-cap": "round" },
+                paint: { "line-color": "#22c55e", "line-width": 5, "line-opacity": 0.8 },
+              });
+            }
+          }
+        } catch (error) {
+          console.error("Error fetching route:", error);
+        }
+      }
+    });
+
+    // Fit bounds - if we have user position, include both; otherwise just center on task
+    if (userPosition) {
+      const bounds = new mapboxgl.LngLatBounds()
+        .extend([userPosition.lng, userPosition.lat])
+        .extend([taskLng, taskLat]);
+      map.current.fitBounds(bounds, { padding: 60, duration: 0 });
+    } else {
+      // Just center on task location
+      map.current.setCenter([taskLng, taskLat]);
+      map.current.setZoom(15);
+    }
 
     return () => {
       map.current?.remove();
@@ -564,7 +679,49 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
       activeTaskIdRef.current = null;
     };
     // IMPORTANT: don't depend on userPosition to avoid recreating map at every GPS tick
-  }, [tabMode, viewMode, activeTask?.id, hasUserPosition]);
+  }, [tabMode, viewMode, activeTask?.id, canShowMap, lifterPosition]);
+
+  // Add user marker when position becomes available after map init
+  useEffect(() => {
+    if (!map.current || !userPosition || userMarkerRef.current) return;
+    
+    const userMarkerEl = document.createElement("div");
+    userMarkerEl.innerHTML = `
+      <div style="position: relative;">
+        <div style="width: 20px; height: 20px; background: #3b82f6; border: 3px solid white; border-radius: 50%; box-shadow: 0 2px 8px rgba(0,0,0,0.3);"></div>
+        <div style="position: absolute; top: -5px; left: -5px; width: 30px; height: 30px; background: rgba(59, 130, 246, 0.3); border-radius: 50%; animation: pulse 2s infinite;"></div>
+      </div>
+      <style>
+        @keyframes pulse {
+          0% { transform: scale(1); opacity: 1; }
+          100% { transform: scale(2); opacity: 0; }
+        }
+      </style>
+    `;
+
+    userMarkerRef.current = new mapboxgl.Marker({ element: userMarkerEl })
+      .setLngLat([userPosition.lng, userPosition.lat])
+      .addTo(map.current);
+    
+    // Also fit bounds now that we have user position
+    if (activeTask?.location_lat != null && activeTask?.location_lng != null) {
+      const { lat: taskLat, lng: taskLng } = resolveTaskCoords(
+        activeTask.location_lat,
+        activeTask.location_lng,
+        userPosition
+      );
+      const bounds = new mapboxgl.LngLatBounds()
+        .extend([userPosition.lng, userPosition.lat])
+        .extend([taskLng, taskLat]);
+      map.current.fitBounds(bounds, { padding: 60, duration: 500 });
+    }
+  }, [userPosition, activeTask?.location_lat, activeTask?.location_lng]);
+
+  // Update user marker position smoothly
+  useEffect(() => {
+    if (!userMarkerRef.current || !userPosition) return;
+    userMarkerRef.current.setLngLat([userPosition.lng, userPosition.lat]);
+  }, [userPosition?.lat, userPosition?.lng]);
 
   // Update task marker position without recreating the map
   useEffect(() => {
@@ -641,6 +798,65 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
     userPosition?.lng,
     hasUserPosition,
   ]);
+
+  // Update route in list view when lifter position changes
+  useEffect(() => {
+    if (!map.current || !lifterPosition || !userPosition || viewMode !== "list") return;
+    
+    const isAssigned = activeTask?.status === "accettato" || activeTask?.status === "in_arrivo";
+    if (!isAssigned) return;
+
+    const updateListRoute = async () => {
+      if (!map.current) return;
+      
+      try {
+        const response = await fetch(
+          `https://api.mapbox.com/directions/v5/mapbox/walking/${lifterPosition.lng},${lifterPosition.lat};${userPosition.lng},${userPosition.lat}?geometries=geojson&access_token=${MAPBOX_TOKEN}`
+        );
+        const data = await response.json();
+
+        if (data.routes && data.routes[0]) {
+          const route = data.routes[0];
+          const distance = route.distance < 1000 
+            ? `${Math.round(route.distance)}m` 
+            : `${(route.distance / 1000).toFixed(1)}km`;
+          const duration = `${Math.round(route.duration / 60)} min`;
+          setRouteInfo({ distance, duration });
+
+          // Update existing route source or add new one
+          const source = map.current.getSource("route") as mapboxgl.GeoJSONSource;
+          if (source) {
+            source.setData({
+              type: "Feature",
+              properties: {},
+              geometry: route.geometry,
+            });
+          } else if (map.current.loaded()) {
+            map.current.addSource("route", {
+              type: "geojson",
+              data: {
+                type: "Feature",
+                properties: {},
+                geometry: route.geometry,
+              },
+            });
+
+            map.current.addLayer({
+              id: "route",
+              type: "line",
+              source: "route",
+              layout: { "line-join": "round", "line-cap": "round" },
+              paint: { "line-color": "#22c55e", "line-width": 5, "line-opacity": 0.8 },
+            });
+          }
+        }
+      } catch (error) {
+        console.error("Error updating route:", error);
+      }
+    };
+
+    updateListRoute();
+  }, [lifterPosition?.lat, lifterPosition?.lng, userPosition?.lat, userPosition?.lng, viewMode, activeTask?.status]);
 
   // Initialize accepted map with route (do not recreate on each GPS update)
   useEffect(() => {
@@ -767,10 +983,51 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
       acceptedMap.current?.remove();
       acceptedMap.current = null;
       acceptedMapKeyRef.current = null;
-      // keep routeInfo state; it will update next time the accepted map initializes
     };
-    // IMPORTANT: don't depend on userPosition to avoid recreating map at every GPS tick
-  }, [viewMode, activeTask?.id, assignedLifterProfile?.avatar_url, lifterPosition?.lat, lifterPosition?.lng, hasUserPosition]);
+  }, [viewMode, activeTask?.id, assignedLifterProfile?.avatar_url, hasUserPosition]);
+
+  // Update lifter marker position and route when lifterPosition changes
+  useEffect(() => {
+    if (!acceptedMap.current || !lifterPosition || !userPosition) return;
+    
+    // Update lifter marker position
+    if (lifterMarkerRef.current) {
+      lifterMarkerRef.current.setLngLat([lifterPosition.lng, lifterPosition.lat]);
+    }
+
+    // Update route
+    const updateRoute = async () => {
+      if (!acceptedMap.current) return;
+      
+      try {
+        const response = await fetch(
+          `https://api.mapbox.com/directions/v5/mapbox/walking/${lifterPosition.lng},${lifterPosition.lat};${userPosition.lng},${userPosition.lat}?geometries=geojson&access_token=${MAPBOX_TOKEN}`
+        );
+        const data = await response.json();
+
+        if (data.routes && data.routes[0]) {
+          const route = data.routes[0];
+          const distance = route.distance < 1000 ? `${Math.round(route.distance)}m` : `${(route.distance / 1000).toFixed(1)}km`;
+          const duration = `${Math.round(route.duration / 60)} min`;
+          setRouteInfo({ distance, duration });
+
+          // Update existing route source or add new one
+          const source = acceptedMap.current.getSource("route") as mapboxgl.GeoJSONSource;
+          if (source) {
+            source.setData({
+              type: "Feature",
+              properties: {},
+              geometry: route.geometry,
+            });
+          }
+        }
+      } catch (error) {
+        console.error("Error updating route:", error);
+      }
+    };
+
+    updateRoute();
+  }, [lifterPosition?.lat, lifterPosition?.lng, userPosition?.lat, userPosition?.lng]);
 
   const handleOpenChat = () => {
     if (activeTask?.lifter_id) {
@@ -1396,34 +1653,36 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
     );
   }
 
-  // Accepted view with map, route, and chat button
+  // Accepted view with expandable map, route, and chat button
   if (viewMode === "accepted" && activeTask && assignedLifterProfile) {
-    const taskLat = activeTask.location_lat ? Number(activeTask.location_lat) : userPosition?.lat || 45.5416;
-    const taskLng = activeTask.location_lng ? Number(activeTask.location_lng) : userPosition?.lng || 10.2118;
-    const lifterLat = lifterPosition?.lat || taskLat + 0.002;
-    const lifterLng = lifterPosition?.lng || taskLng + 0.003;
-
     return (
       <div className="fixed inset-0 bg-background z-50 flex flex-col" style={{ top: '70px', bottom: '60px' }}>
-        {/* Map Section - 50% height */}
-        <div className="h-[50%] relative bg-muted">
+        {/* Map Section - expandable with motion */}
+        <motion.div 
+          className="relative bg-muted"
+          animate={{ 
+            height: isMapExpanded ? 'calc(100% - 100px)' : '50%'
+          }}
+          transition={{ type: "spring", damping: 25, stiffness: 300 }}
+          style={{ flexShrink: 0 }}
+        >
           <div 
             ref={acceptedMapContainer} 
             className="absolute inset-0"
             key="accepted-map"
           />
           
-          {/* Route info overlay */}
+          {/* Route info overlay - positioned to avoid banner */}
           {routeInfo && (
-            <div className="absolute top-4 left-4 right-4 flex justify-center z-10">
-              <div className="bg-card/95 backdrop-blur-sm px-5 py-3 rounded-2xl shadow-lg flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                  <Navigation className="w-4 h-4 text-primary" />
+            <div className="absolute top-14 left-4 z-10">
+              <div className="bg-card/95 backdrop-blur-sm px-4 py-2.5 rounded-2xl shadow-lg flex items-center gap-3">
+                <div className="flex items-center gap-1.5">
+                  <Navigation className="w-4 h-4 text-green-600" />
                   <span className="font-bold text-foreground">{routeInfo.distance}</span>
                 </div>
-                <div className="w-px h-5 bg-border" />
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground">🚶</span>
+                <div className="w-px h-4 bg-border" />
+                <div className="flex items-center gap-1.5">
+                  <Clock className="w-4 h-4 text-green-600" />
                   <span className="font-medium text-foreground">{routeInfo.duration}</span>
                 </div>
               </div>
@@ -1431,15 +1690,15 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
           )}
 
           {/* Live indicator */}
-          <div className="absolute top-4 right-4 bg-card/90 backdrop-blur-sm px-3 py-1.5 rounded-full shadow-soft flex items-center gap-2 z-10">
-            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-            <span className="text-xs font-medium text-foreground">In arrivo</span>
+          <div className="absolute top-4 right-4 bg-green-500 text-white px-3 py-1.5 rounded-full shadow-lg flex items-center gap-2 z-10">
+            <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
+            <span className="text-xs font-bold">In arrivo</span>
           </div>
           
-          {/* Map legend */}
-          <div className="absolute bottom-3 left-3 flex items-center gap-2 z-10">
+          {/* Map legend - moved up to avoid panel overlap */}
+          <div className="absolute bottom-8 left-3 flex items-center gap-2 z-10">
             <div className="bg-card/90 backdrop-blur-sm px-3 py-1.5 rounded-full shadow-soft flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-blue-600" />
+              <div className="w-2 h-2 rounded-full bg-blue-600 animate-pulse" />
               <span className="text-xs font-medium text-muted-foreground">Tu</span>
             </div>
             <div className="bg-card/90 backdrop-blur-sm px-3 py-1.5 rounded-full shadow-soft flex items-center gap-2">
@@ -1447,115 +1706,182 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
               <span className="text-xs font-medium text-muted-foreground">{assignedLifterProfile.full_name}</span>
             </div>
           </div>
-        </div>
+        </motion.div>
 
-        {/* Task Info - 50% height with rounded top */}
-        <div className="h-[50%] bg-background -mt-6 rounded-t-3xl relative z-10 shadow-[0_-4px_20px_rgba(0,0,0,0.1)] overflow-hidden">
-          {/* Drag handle */}
-          <div className="flex justify-center pt-3 pb-2">
-            <div className="w-10 h-1 bg-muted-foreground/30 rounded-full" />
-          </div>
-
-          <div className="px-5 pb-6 overflow-y-auto h-full">
-            {/* Lifter Profile Row */}
-            <div className="flex items-center gap-4 mb-4">
-              <div className="w-16 h-16 rounded-full bg-muted border-3 border-green-500 flex items-center justify-center overflow-hidden">
-                {assignedLifterProfile.avatar_url ? (
-                  <img src={assignedLifterProfile.avatar_url} alt={assignedLifterProfile.full_name} className="w-full h-full object-cover" />
-                ) : (
-                  <User className="w-8 h-8 text-muted-foreground" />
-                )}
-              </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <h3 className="font-bold text-lg text-foreground">{assignedLifterProfile.full_name}</h3>
-                  {assignedLifterProfile.is_kyc_verified && (
-                    <Shield className="w-4 h-4 text-green-500" />
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
-                  <span className="font-medium text-foreground">{assignedLifterProfile.rating?.toFixed(1) || "4.8"}</span>
-                  <span className="text-muted-foreground text-sm">• {assignedLifterProfile.total_reviews || 0} recensioni</span>
-                </div>
-              </div>
-              <div className="text-right">
-                <span className="text-2xl font-bold text-primary">{activeTask.published_price}€</span>
-              </div>
-            </div>
-
-            {/* Task info */}
-            <div className="bg-muted/50 rounded-xl p-3 mb-4">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-lg">{categoryEmojis[activeTask.category] || "📍"}</span>
-                <h4 className="font-semibold text-foreground">{activeTask.title}</h4>
-              </div>
-              <p className="text-sm text-muted-foreground line-clamp-2">{activeTask.description}</p>
-              {activeTask.location_address && (
-                <div className="flex items-center gap-1 mt-2 text-xs text-muted-foreground">
-                  <MapPin className="w-3 h-3" />
-                  <span>{activeTask.location_address}</span>
-                </div>
+        {/* Swipeable Task Info Panel */}
+        <motion.div 
+          className="bg-background rounded-t-3xl shadow-[0_-4px_20px_rgba(0,0,0,0.15)] overflow-hidden relative"
+          style={{ marginTop: "-24px", zIndex: 20 }}
+          animate={{ 
+            height: isMapExpanded ? '100px' : '50%'
+          }}
+          transition={{ type: "spring", damping: 25, stiffness: 300 }}
+          drag="y"
+          dragConstraints={{ top: 0, bottom: 0 }}
+          dragElastic={0.1}
+          onDragEnd={(_: any, info: PanInfo) => {
+            if (info.velocity.y < -200 || info.offset.y < -30) {
+              setIsMapExpanded(false);
+            } else if (info.velocity.y > 200 || info.offset.y > 30) {
+              setIsMapExpanded(true);
+            }
+          }}
+        >
+          {/* Drag Handle */}
+          <div className="w-full py-3 flex flex-col items-center justify-center cursor-grab active:cursor-grabbing touch-none">
+            <div className="w-12 h-1.5 bg-muted-foreground/40 rounded-full mb-1.5" />
+            <div className="flex items-center gap-1 text-xs text-muted-foreground">
+              {isMapExpanded ? (
+                <>
+                  <ChevronUp className="w-3 h-3" />
+                  <span>Trascina per dettagli</span>
+                </>
+              ) : (
+                <>
+                  <ChevronDown className="w-3 h-3" />
+                  <span>Trascina per mappa</span>
+                </>
               )}
             </div>
-
-            {/* Task Completato button - main CTA */}
-            <button
-              onClick={handleCompleteTask}
-              className="w-full h-14 bg-green-500 hover:bg-green-600 text-white rounded-2xl font-bold text-lg flex items-center justify-center gap-2 tap-scale mb-3 shadow-lg"
-            >
-              <Check className="w-6 h-6" />
-              Task Completato ✓
-            </button>
-
-            {/* Action buttons */}
-            <div className="flex gap-3">
-              <button
-                onClick={() => handleOpenDetails(activeTask)}
-                className="flex-1 h-12 bg-muted text-foreground rounded-xl font-semibold flex items-center justify-center gap-2 tap-scale"
-              >
-                <Info className="w-4 h-4" />
-                Dettagli
-              </button>
-              <button
-                onClick={() => setViewMode("chat")}
-                className="flex-1 h-12 bg-primary text-primary-foreground rounded-xl font-semibold flex items-center justify-center gap-2 tap-scale relative"
-              >
-                <MessageCircle className="w-4 h-4" />
-                Chat
-                {unreadCount > 0 && (
-                  <span className="absolute -top-2 -right-2 min-w-5 h-5 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center px-1">
-                    {unreadCount > 9 ? '9+' : unreadCount}
-                  </span>
-                )}
-              </button>
-            </div>
-
-            {/* Edit/Cancel also after acceptance */}
-            <div className="flex gap-3 mt-3">
-              <button
-                onClick={() => {
-                  handleOpenDetails(activeTask);
-                  setTimeout(() => handleEditTask(activeTask), 0);
-                }}
-                className="flex-1 h-12 bg-primary/10 text-primary rounded-xl font-semibold flex items-center justify-center gap-2 tap-scale"
-              >
-                <Edit2 className="w-4 h-4" />
-                Modifica
-              </button>
-              <button
-                onClick={() => {
-                  handleOpenDetails(activeTask);
-                  setTimeout(() => setShowCancelConfirm(true), 0);
-                }}
-                className="flex-1 h-12 bg-destructive text-destructive-foreground rounded-xl font-semibold flex items-center justify-center gap-2 tap-scale"
-              >
-                <Trash2 className="w-4 h-4" />
-                Annulla
-              </button>
-            </div>
           </div>
-        </div>
+
+          {/* Collapsed mini-view */}
+          {isMapExpanded && (
+            <div className="px-4 pb-2 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-green-500">
+                  {assignedLifterProfile.avatar_url ? (
+                    <img src={assignedLifterProfile.avatar_url} alt="" className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full bg-muted flex items-center justify-center">
+                      <User className="w-5 h-5 text-muted-foreground" />
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <p className="font-bold text-foreground text-sm">{assignedLifterProfile.full_name}</p>
+                  <p className="text-xs text-green-600">In arrivo • {routeInfo?.duration || '...'}</p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => handleOpenDetails(activeTask)}
+                  className="w-10 h-10 bg-muted rounded-full flex items-center justify-center tap-scale"
+                >
+                  <Info className="w-5 h-5 text-foreground" />
+                </button>
+                <button 
+                  onClick={() => setViewMode("chat")}
+                  className="w-10 h-10 bg-primary rounded-full flex items-center justify-center tap-scale relative"
+                >
+                  <MessageCircle className="w-5 h-5 text-primary-foreground" />
+                  {unreadCount > 0 && (
+                    <span className="absolute -top-1 -right-1 min-w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-0.5">
+                      {unreadCount > 9 ? '9+' : unreadCount}
+                    </span>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Full content when not expanded */}
+          {!isMapExpanded && (
+            <div className="px-5 pb-6 overflow-y-auto" style={{ height: 'calc(100% - 50px)' }}>
+              {/* Lifter Profile Row */}
+              <div className="flex items-center gap-4 mb-4">
+                <div className="w-16 h-16 rounded-full bg-muted border-3 border-green-500 flex items-center justify-center overflow-hidden">
+                  {assignedLifterProfile.avatar_url ? (
+                    <img src={assignedLifterProfile.avatar_url} alt={assignedLifterProfile.full_name} className="w-full h-full object-cover" />
+                  ) : (
+                    <User className="w-8 h-8 text-muted-foreground" />
+                  )}
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-lg text-foreground">{assignedLifterProfile.full_name}</h3>
+                    {assignedLifterProfile.is_kyc_verified && (
+                      <Shield className="w-4 h-4 text-green-500" />
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
+                    <span className="font-medium text-foreground">{assignedLifterProfile.rating?.toFixed(1) || "4.8"}</span>
+                    <span className="text-muted-foreground text-sm">• {assignedLifterProfile.total_reviews || 0} recensioni</span>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="text-2xl font-bold text-primary">{activeTask.published_price}€</span>
+                </div>
+              </div>
+
+              {/* Task info */}
+              <div className="bg-muted/50 rounded-xl p-3 mb-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-lg">{categoryEmojis[activeTask.category] || "📍"}</span>
+                  <h4 className="font-semibold text-foreground">{activeTask.title}</h4>
+                </div>
+                <p className="text-sm text-muted-foreground line-clamp-2">{activeTask.description}</p>
+                {activeTask.location_address && (
+                  <div className="flex items-center gap-1 mt-2 text-xs text-muted-foreground">
+                    <MapPin className="w-3 h-3" />
+                    <span>{activeTask.location_address}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Task Completato button - main CTA */}
+              <button
+                onClick={handleCompleteTask}
+                className="w-full h-14 bg-green-500 hover:bg-green-600 text-white rounded-2xl font-bold text-lg flex items-center justify-center gap-2 tap-scale mb-3 shadow-lg"
+              >
+                <Check className="w-6 h-6" />
+                Task Completato ✓
+              </button>
+
+              {/* Action buttons */}
+              <div className="flex gap-3">
+                <button
+                  onClick={() => handleOpenDetails(activeTask)}
+                  className="flex-1 h-12 bg-muted text-foreground rounded-xl font-semibold flex items-center justify-center gap-2 tap-scale"
+                >
+                  <Info className="w-4 h-4" />
+                  Dettagli
+                </button>
+                <button
+                  onClick={() => setViewMode("chat")}
+                  className="flex-1 h-12 bg-primary text-primary-foreground rounded-xl font-semibold flex items-center justify-center gap-2 tap-scale relative"
+                >
+                  <MessageCircle className="w-4 h-4" />
+                  Chat
+                  {unreadCount > 0 && (
+                    <span className="absolute -top-2 -right-2 min-w-5 h-5 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center px-1">
+                      {unreadCount > 9 ? '9+' : unreadCount}
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              {/* Edit/Cancel buttons */}
+              <div className="flex gap-3 mt-3">
+                <button
+                  onClick={() => handleEditTask(activeTask)}
+                  className="flex-1 h-12 bg-primary/10 text-primary rounded-xl font-semibold flex items-center justify-center gap-2 tap-scale"
+                >
+                  <Edit2 className="w-4 h-4" />
+                  Modifica
+                </button>
+                <button
+                  onClick={() => setShowCancelConfirm(true)}
+                  className="flex-1 h-12 bg-destructive text-destructive-foreground rounded-xl font-semibold flex items-center justify-center gap-2 tap-scale"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Annulla
+                </button>
+              </div>
+            </div>
+          )}
+        </motion.div>
       </div>
     );
   }
@@ -1805,9 +2131,99 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
 
       {tabMode === "in_corso" ? (
         activeTask ? (
-          <div className="flex-1 flex flex-col overflow-hidden">
-            {/* Fixed Map - exactly 50% of content area */}
-            <div className="flex-shrink-0 relative bg-muted" style={{ height: halfHeight }}>
+          // Show waiting view when task is in_attesa with no proposals
+          activeTask.status === 'in_attesa' && getApplicationsForTask(activeTask.id).length === 0 ? (
+            <WaitingForLifterView
+              taskTitle={activeTask.title}
+              taskCategory={activeTask.category}
+              taskPrice={activeTask.published_price}
+              taskDescription={activeTask.description || undefined}
+              categoryEmoji={categoryEmojis[activeTask.category] || "✨"}
+              onEdit={() => {
+                setDetailTask(activeTask);
+                handleEditTask(activeTask);
+              }}
+              onCancel={() => {
+                setDetailTask(activeTask);
+                setShowCancelConfirm(true);
+              }}
+            />
+          ) : activeTask.status === 'in_attesa' && getApplicationsForTask(activeTask.id).length > 0 ? (
+            // Show proposals view when task has applications
+            <div className="flex-1 flex flex-col items-center justify-center px-6 py-8 text-center">
+              <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center mb-6">
+                <Users className="w-10 h-10 text-primary" />
+              </div>
+              <h2 className="text-xl font-bold text-foreground mb-2">
+                Hai ricevuto {getApplicationsForTask(activeTask.id).length} {getApplicationsForTask(activeTask.id).length === 1 ? 'proposta' : 'proposte'}!
+              </h2>
+              <p className="text-muted-foreground mb-6 max-w-xs">
+                Dai un'occhiata ai Lifter che si sono candidati per il tuo task
+              </p>
+              <button
+                onClick={() => {
+                  setSelectedTaskForProposals(activeTask);
+                  setViewMode("proposals");
+                }}
+                className="w-full max-w-xs h-14 bg-primary text-primary-foreground rounded-2xl font-bold text-lg shadow-lg tap-scale"
+              >
+                Vedi proposte
+              </button>
+              <div className="flex gap-3 mt-4 w-full max-w-xs">
+                <button
+                  onClick={() => {
+                    setDetailTask(activeTask);
+                    handleEditTask(activeTask);
+                  }}
+                  className="flex-1 h-12 bg-muted hover:bg-muted/80 text-foreground rounded-xl font-semibold flex items-center justify-center gap-2 tap-scale transition-colors"
+                >
+                  <Edit2 className="w-4 h-4" />
+                  Modifica
+                </button>
+                <button
+                  onClick={() => {
+                    setDetailTask(activeTask);
+                    setShowCancelConfirm(true);
+                  }}
+                  className="flex-1 h-12 bg-destructive/10 hover:bg-destructive/20 text-destructive rounded-xl font-semibold flex items-center justify-center gap-2 tap-scale transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Annulla
+                </button>
+              </div>
+            </div>
+          ) : (activeTask.status === 'accettato' || activeTask.status === 'in_arrivo') && assignedLifterProfile && userPosition ? (
+            // Show active task map view when lifter is assigned
+            <ActiveTaskMapView
+              task={activeTask}
+              lifterProfile={assignedLifterProfile}
+              userPosition={userPosition}
+              lifterPosition={lifterPosition}
+              unreadCount={unreadCount}
+              onOpenChat={handleOpenChat}
+              onOpenDetails={() => handleOpenDetails(activeTask)}
+              onComplete={handleCompleteTask}
+              onEdit={() => {
+                handleOpenDetails(activeTask);
+                setTimeout(() => handleEditTask(activeTask), 0);
+              }}
+              onCancel={() => {
+                handleOpenDetails(activeTask);
+                setTimeout(() => setShowCancelConfirm(true), 0);
+              }}
+              categoryEmoji={categoryEmojis[activeTask.category] || "✨"}
+            />
+          ) : (
+          <div className="flex-1 flex flex-col overflow-hidden relative">
+            {/* Map Section */}
+            <motion.div 
+              className="relative bg-muted"
+              animate={{ 
+                height: isMapExpanded ? 'calc(100% - 100px)' : '50%'
+              }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              style={{ flexShrink: 0 }}
+            >
               <div ref={mapContainer} className="absolute inset-0" />
 
               {isLocating && (
@@ -1819,8 +2235,33 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
                 </div>
               )}
 
-              {/* Map overlays */}
-              <div className="absolute bottom-3 left-3 flex items-center gap-2 z-10">
+              {/* Route info when lifter is assigned - positioned to avoid overlap */}
+              {(activeTask.status === 'accettato' || activeTask.status === 'in_arrivo') && routeInfo && (
+                <div className="absolute top-14 left-4 z-10">
+                  <div className="bg-card/95 backdrop-blur-sm px-4 py-2.5 rounded-2xl shadow-lg flex items-center gap-3">
+                    <div className="flex items-center gap-1.5">
+                      <Navigation className="w-4 h-4 text-green-600" />
+                      <span className="font-bold text-foreground">{routeInfo.distance}</span>
+                    </div>
+                    <div className="w-px h-4 bg-border" />
+                    <div className="flex items-center gap-1.5">
+                      <Clock className="w-4 h-4 text-green-600" />
+                      <span className="font-medium text-foreground">{routeInfo.duration}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Live indicator when assigned */}
+              {(activeTask.status === 'accettato' || activeTask.status === 'in_arrivo') && (
+                <div className="absolute top-4 right-4 bg-green-500 text-white px-3 py-1.5 rounded-full shadow-lg flex items-center gap-2 z-10">
+                  <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
+                  <span className="text-xs font-bold">In arrivo</span>
+                </div>
+              )}
+
+              {/* Map legend - moved higher to avoid panel overlap */}
+              <div className="absolute bottom-8 left-3 flex items-center gap-2 z-10">
                 <div className="bg-card/90 backdrop-blur-sm px-3 py-1.5 rounded-full shadow-soft flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-blue-600 animate-pulse" />
                   <span className="text-xs font-medium text-muted-foreground">Tu</span>
@@ -1837,169 +2278,295 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
                   </div>
                 )}
               </div>
-            </div>
+            </motion.div>
 
-            {/* Scrollable Content - exactly 50% of content area */}
-            <div className="flex-1 overflow-y-auto bg-background" style={{ height: halfHeight }}>
-              <div className="px-4 py-4 space-y-4">
-                {/* Task card */}
-                <div className={cn(
-                  "bg-card rounded-2xl p-4 shadow-card border",
-                  (activeTask.status === 'accettato' || activeTask.status === 'in_arrivo') 
-                    ? "border-green-500" 
-                    : "border-border"
-                )}>
-                  {/* Assigned Lifter header */}
-                  {(activeTask.status === 'accettato' || activeTask.status === 'in_arrivo') && assignedLifterProfile && (
-                    <div className="flex items-center gap-3 pb-3 mb-3 border-b border-border">
-                      <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-green-500">
-                        {assignedLifterProfile.avatar_url ? (
-                          <img src={assignedLifterProfile.avatar_url} alt="" className="w-full h-full object-cover" />
-                        ) : (
-                          <div className="w-full h-full bg-muted flex items-center justify-center">
-                            <User className="w-6 h-6 text-muted-foreground" />
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex-1">
-                        <p className="font-bold text-foreground">{assignedLifterProfile.full_name}</p>
-                        <p className="text-sm text-green-600">In arrivo...</p>
-                      </div>
-                      <div className="w-4 h-4 rounded-full bg-green-500 animate-pulse" />
-                    </div>
-                  )}
-
-                  {/* Task header */}
-                  <div className="flex items-center gap-3 mb-4">
-                    <span className="text-4xl">{categoryEmojis[activeTask.category] || "📍"}</span>
-                    <div className="flex-1">
-                      <h3 className="font-bold text-foreground text-lg">{activeTask.title}</h3>
-                      {getStatusBadge(activeTask.status, getApplicationsForTask(activeTask.id).length > 0)}
-                    </div>
-                    <div className="text-right">
-                      <p className="text-2xl font-bold text-primary">{activeTask.published_price}€</p>
-                    </div>
-                  </div>
-
-                  {/* Proposals alert with Lifter photos */}
-                  {activeTask.status === 'in_attesa' && getApplicationsForTask(activeTask.id).length > 0 && (
-                    <button
-                      onClick={() => handleOpenProposals(activeTask)}
-                      className="w-full mb-4 p-4 bg-primary/10 border border-primary/30 rounded-2xl flex items-center justify-between tap-scale"
-                    >
-                      <div className="flex items-center gap-3">
-                        {/* Stacked Lifter photos */}
-                        <div className="flex -space-x-3">
-                          {getApplicationsForTask(activeTask.id).slice(0, 3).map((app, idx) => (
-                            <div 
-                              key={app.id}
-                              className="w-12 h-12 rounded-full border-2 border-card overflow-hidden bg-muted"
-                              style={{ zIndex: 3 - idx }}
-                            >
-                              {app.lifter_profile?.avatar_url ? (
-                                <img 
-                                  src={app.lifter_profile.avatar_url} 
-                                  alt="" 
-                                  className="w-full h-full object-cover" 
-                                />
-                              ) : (
-                                <div className="w-full h-full flex items-center justify-center">
-                                  <User className="w-6 h-6 text-muted-foreground" />
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                          {getApplicationsForTask(activeTask.id).length > 3 && (
-                            <div 
-                              className="w-12 h-12 rounded-full border-2 border-card bg-primary flex items-center justify-center text-primary-foreground font-bold text-sm"
-                            >
-                              +{getApplicationsForTask(activeTask.id).length - 3}
-                            </div>
-                          )}
-                        </div>
-                        <div>
-                          <p className="font-bold text-foreground">
-                            {getApplicationsForTask(activeTask.id).length} Lifter interessat{getApplicationsForTask(activeTask.id).length > 1 ? 'i' : 'o'}
-                          </p>
-                          <p className="text-sm text-muted-foreground">Tocca per scegliere</p>
-                        </div>
-                      </div>
-                      <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center">
-                        <ChevronLeft className="w-5 h-5 text-primary-foreground rotate-180" />
-                      </div>
-                    </button>
-                  )}
-
-                  {/* Task details */}
-                  <div className="bg-muted rounded-xl p-3 mb-4">
-                    <p className="text-sm text-muted-foreground">{activeTask.description}</p>
-                  </div>
-
-                  {/* Task Completato button - main CTA for assigned tasks */}
-                  {(activeTask.status === 'accettato' || activeTask.status === 'in_arrivo') && activeTask.lifter_id && (
-                    <button
-                      onClick={handleCompleteTask}
-                      className="w-full h-14 bg-green-500 hover:bg-green-600 text-white rounded-2xl font-bold text-lg flex items-center justify-center gap-2 tap-scale mb-3 shadow-lg"
-                    >
-                      <Check className="w-6 h-6" />
-                      Task Completato ✓
-                    </button>
-                  )}
-
-                  {/* Action buttons */}
-                  <div className="flex gap-3">
-                    <button 
-                      onClick={() => handleOpenDetails(activeTask)}
-                      className="flex-1 h-12 bg-muted text-foreground rounded-xl font-semibold flex items-center justify-center gap-2 tap-scale"
-                    >
-                      <Info className="w-5 h-5" />
-                      Dettagli
-                    </button>
-                    {activeTask.lifter_id && (
-                      <button 
-                        onClick={handleOpenChat}
-                        className="flex-1 h-12 bg-primary text-primary-foreground rounded-xl font-semibold flex items-center justify-center gap-2 tap-scale relative"
-                      >
-                        <MessageCircle className="w-5 h-5" />
-                        Chat
-                        {unreadCount > 0 && (
-                          <span className="absolute -top-2 -right-2 min-w-5 h-5 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center px-1">
-                            {unreadCount > 9 ? '9+' : unreadCount}
-                          </span>
-                        )}
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Edit/Cancel also after acceptance */}
-                  {(activeTask.status === 'accettato' || activeTask.status === 'in_arrivo') && (
-                    <div className="flex gap-3 mt-3">
-                      <button
-                        onClick={() => {
-                          handleOpenDetails(activeTask);
-                          setTimeout(() => handleEditTask(activeTask), 0);
-                        }}
-                        className="flex-1 h-12 bg-primary/10 text-primary rounded-xl font-semibold flex items-center justify-center gap-2 tap-scale"
-                      >
-                        <Edit2 className="w-5 h-5" />
-                        Modifica
-                      </button>
-                      <button
-                        onClick={() => {
-                          handleOpenDetails(activeTask);
-                          setTimeout(() => setShowCancelConfirm(true), 0);
-                        }}
-                        className="flex-1 h-12 bg-destructive text-destructive-foreground rounded-xl font-semibold flex items-center justify-center gap-2 tap-scale"
-                      >
-                        <Trash2 className="w-5 h-5" />
-                        Annulla
-                      </button>
-                    </div>
+            {/* Swipeable Content Panel */}
+            <motion.div 
+              className="bg-background rounded-t-3xl shadow-[0_-4px_20px_rgba(0,0,0,0.15)] overflow-hidden relative"
+              style={{ marginTop: "-24px", zIndex: 20 }}
+              animate={{ 
+                height: isMapExpanded ? '100px' : '50%'
+              }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              drag="y"
+              dragConstraints={{ top: 0, bottom: 0 }}
+              dragElastic={0.1}
+              onDragEnd={(_: any, info: PanInfo) => {
+                if (info.velocity.y < -200 || info.offset.y < -30) {
+                  setIsMapExpanded(false);
+                } else if (info.velocity.y > 200 || info.offset.y > 30) {
+                  setIsMapExpanded(true);
+                }
+              }}
+            >
+              {/* Drag Handle */}
+              <div className="w-full py-3 flex flex-col items-center justify-center cursor-grab active:cursor-grabbing touch-none">
+                <div className="w-12 h-1.5 bg-muted-foreground/40 rounded-full mb-1.5" />
+                <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                  {isMapExpanded ? (
+                    <>
+                      <ChevronUp className="w-3 h-3" />
+                      <span>Trascina per dettagli</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronDown className="w-3 h-3" />
+                      <span>Trascina per mappa</span>
+                    </>
                   )}
                 </div>
               </div>
-            </div>
+
+              {/* Collapsed mini-view - shows when map is expanded */}
+              {isMapExpanded && (
+                <div className="px-4 pb-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      {(activeTask.status === 'accettato' || activeTask.status === 'in_arrivo') && assignedLifterProfile ? (
+                        <>
+                          <div className="w-12 h-12 rounded-full overflow-hidden border-3 border-green-500">
+                            {assignedLifterProfile.avatar_url ? (
+                              <img src={assignedLifterProfile.avatar_url} alt="" className="w-full h-full object-cover" />
+                            ) : (
+                              <div className="w-full h-full bg-muted flex items-center justify-center">
+                                <User className="w-6 h-6 text-muted-foreground" />
+                              </div>
+                            )}
+                          </div>
+                          <div>
+                            <p className="font-bold text-foreground">{assignedLifterProfile.full_name}</p>
+                            {routeInfo ? (
+                              <div className="flex items-center gap-2 text-xs">
+                                <span className="text-green-600 font-medium">📍 {routeInfo.distance}</span>
+                                <span className="text-muted-foreground">•</span>
+                                <span className="text-green-600 font-medium">🚶 {routeInfo.duration}</span>
+                              </div>
+                            ) : (
+                              <p className="text-xs text-green-600">In arrivo...</p>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-3xl">{categoryEmojis[activeTask.category] || "📍"}</span>
+                          <div>
+                            <p className="font-bold text-foreground">{activeTask.title}</p>
+                            <p className="text-sm text-primary font-bold">{activeTask.published_price}€</p>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => handleOpenDetails(activeTask)}
+                        className="w-11 h-11 bg-muted rounded-full flex items-center justify-center tap-scale"
+                      >
+                        <Info className="w-5 h-5 text-foreground" />
+                      </button>
+                      {activeTask.lifter_id && (
+                        <button 
+                          onClick={handleOpenChat}
+                          className="w-11 h-11 bg-primary rounded-full flex items-center justify-center tap-scale relative"
+                        >
+                          <MessageCircle className="w-5 h-5 text-primary-foreground" />
+                          {unreadCount > 0 && (
+                            <span className="absolute -top-1 -right-1 min-w-5 h-5 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center px-1">
+                              {unreadCount > 9 ? '9+' : unreadCount}
+                            </span>
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Full content when expanded */}
+              {!isMapExpanded && (
+                <div className="flex-1 overflow-y-auto px-4 pb-4">
+                  {/* Task card */}
+                  <div className={cn(
+                    "bg-card rounded-2xl p-4 shadow-card border",
+                    (activeTask.status === 'accettato' || activeTask.status === 'in_arrivo') 
+                      ? "border-green-500" 
+                      : "border-border"
+                  )}>
+                    {/* Assigned Lifter header with ETA */}
+                    {(activeTask.status === 'accettato' || activeTask.status === 'in_arrivo') && assignedLifterProfile && (
+                      <div className="bg-green-500/10 rounded-xl p-3 mb-4 border border-green-500/30">
+                        <div className="flex items-center gap-3 mb-2">
+                          <div className="w-14 h-14 rounded-full overflow-hidden border-3 border-green-500">
+                            {assignedLifterProfile.avatar_url ? (
+                              <img src={assignedLifterProfile.avatar_url} alt="" className="w-full h-full object-cover" />
+                            ) : (
+                              <div className="w-full h-full bg-muted flex items-center justify-center">
+                                <User className="w-7 h-7 text-muted-foreground" />
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <p className="font-bold text-foreground text-lg">{assignedLifterProfile.full_name}</p>
+                              <div className="w-3 h-3 rounded-full bg-green-500 animate-pulse" />
+                            </div>
+                            {routeInfo ? (
+                              <div className="flex items-center gap-3 mt-1">
+                                <div className="flex items-center gap-1.5 bg-green-500/20 px-2 py-1 rounded-lg">
+                                  <Navigation className="w-4 h-4 text-green-600" />
+                                  <span className="text-sm font-bold text-green-700">{routeInfo.distance}</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 bg-green-500/20 px-2 py-1 rounded-lg">
+                                  <Clock className="w-4 h-4 text-green-600" />
+                                  <span className="text-sm font-bold text-green-700">{routeInfo.duration}</span>
+                                </div>
+                              </div>
+                            ) : (
+                              <p className="text-sm text-green-600 mt-1">Calcolo percorso...</p>
+                            )}
+                          </div>
+                        </div>
+                        {/* Star rating */}
+                        <div className="flex items-center gap-1 mt-2 pt-2 border-t border-green-500/20">
+                          <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
+                          <span className="text-sm font-medium text-foreground">{assignedLifterProfile.rating?.toFixed(1) || "4.8"}</span>
+                          <span className="text-sm text-muted-foreground">• {assignedLifterProfile.total_reviews || 0} recensioni</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Task header */}
+                    <div className="flex items-center gap-3 mb-4">
+                      <span className="text-4xl">{categoryEmojis[activeTask.category] || "📍"}</span>
+                      <div className="flex-1">
+                        <h3 className="font-bold text-foreground text-lg">{activeTask.title}</h3>
+                        {getStatusBadge(activeTask.status, getApplicationsForTask(activeTask.id).length > 0)}
+                      </div>
+                      <div className="text-right">
+                        <p className="text-2xl font-bold text-primary">{activeTask.published_price}€</p>
+                      </div>
+                    </div>
+
+                    {/* Proposals alert with Lifter photos */}
+                    {activeTask.status === 'in_attesa' && getApplicationsForTask(activeTask.id).length > 0 && (
+                      <button
+                        onClick={() => handleOpenProposals(activeTask)}
+                        className="w-full mb-4 p-4 bg-primary/10 border border-primary/30 rounded-2xl flex items-center justify-between tap-scale"
+                      >
+                        <div className="flex items-center gap-3">
+                          {/* Stacked Lifter photos */}
+                          <div className="flex -space-x-3">
+                            {getApplicationsForTask(activeTask.id).slice(0, 3).map((app, idx) => (
+                              <div 
+                                key={app.id}
+                                className="w-12 h-12 rounded-full border-2 border-card overflow-hidden bg-muted"
+                                style={{ zIndex: 3 - idx }}
+                              >
+                                {app.lifter_profile?.avatar_url ? (
+                                  <img 
+                                    src={app.lifter_profile.avatar_url} 
+                                    alt="" 
+                                    className="w-full h-full object-cover" 
+                                  />
+                                ) : (
+                                  <div className="w-full h-full flex items-center justify-center">
+                                    <User className="w-6 h-6 text-muted-foreground" />
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                            {getApplicationsForTask(activeTask.id).length > 3 && (
+                              <div 
+                                className="w-12 h-12 rounded-full border-2 border-card bg-primary flex items-center justify-center text-primary-foreground font-bold text-sm"
+                              >
+                                +{getApplicationsForTask(activeTask.id).length - 3}
+                              </div>
+                            )}
+                          </div>
+                          <div>
+                            <p className="font-bold text-foreground">
+                              {getApplicationsForTask(activeTask.id).length} Lifter interessat{getApplicationsForTask(activeTask.id).length > 1 ? 'i' : 'o'}
+                            </p>
+                            <p className="text-sm text-muted-foreground">Tocca per scegliere</p>
+                          </div>
+                        </div>
+                        <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center">
+                          <ChevronLeft className="w-5 h-5 text-primary-foreground rotate-180" />
+                        </div>
+                      </button>
+                    )}
+
+                    {/* Task details */}
+                    <div className="bg-muted rounded-xl p-3 mb-4">
+                      <p className="text-sm text-muted-foreground">{activeTask.description}</p>
+                    </div>
+
+                    {/* Task Completato button - main CTA for assigned tasks */}
+                    {(activeTask.status === 'accettato' || activeTask.status === 'in_arrivo') && activeTask.lifter_id && (
+                      <button
+                        onClick={handleCompleteTask}
+                        className="w-full h-14 bg-green-500 hover:bg-green-600 text-white rounded-2xl font-bold text-lg flex items-center justify-center gap-2 tap-scale mb-3 shadow-lg"
+                      >
+                        <Check className="w-6 h-6" />
+                        Task Completato ✓
+                      </button>
+                    )}
+
+                    {/* Action buttons */}
+                    <div className="flex gap-3">
+                      <button 
+                        onClick={() => handleOpenDetails(activeTask)}
+                        className="flex-1 h-12 bg-muted text-foreground rounded-xl font-semibold flex items-center justify-center gap-2 tap-scale"
+                      >
+                        <Info className="w-5 h-5" />
+                        Dettagli
+                      </button>
+                      {activeTask.lifter_id && (
+                        <button 
+                          onClick={handleOpenChat}
+                          className="flex-1 h-12 bg-primary text-primary-foreground rounded-xl font-semibold flex items-center justify-center gap-2 tap-scale relative"
+                        >
+                          <MessageCircle className="w-5 h-5" />
+                          Chat
+                          {unreadCount > 0 && (
+                            <span className="absolute -top-2 -right-2 min-w-5 h-5 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center px-1">
+                              {unreadCount > 9 ? '9+' : unreadCount}
+                            </span>
+                          )}
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Edit/Cancel also after acceptance */}
+                    {(activeTask.status === 'accettato' || activeTask.status === 'in_arrivo') && (
+                      <div className="flex gap-3 mt-3">
+                        <button
+                          onClick={() => {
+                            handleOpenDetails(activeTask);
+                            setTimeout(() => handleEditTask(activeTask), 0);
+                          }}
+                          className="flex-1 h-12 bg-primary/10 text-primary rounded-xl font-semibold flex items-center justify-center gap-2 tap-scale"
+                        >
+                          <Edit2 className="w-5 h-5" />
+                          Modifica
+                        </button>
+                        <button
+                          onClick={() => {
+                            handleOpenDetails(activeTask);
+                            setTimeout(() => setShowCancelConfirm(true), 0);
+                          }}
+                          className="flex-1 h-12 bg-destructive text-destructive-foreground rounded-xl font-semibold flex items-center justify-center gap-2 tap-scale"
+                        >
+                          <Trash2 className="w-5 h-5" />
+                          Annulla
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </motion.div>
           </div>
+          )
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center px-4 text-center">
             <span className="text-6xl mb-4">📭</span>

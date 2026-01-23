@@ -108,7 +108,11 @@ interface Position {
   address?: string;
 }
 
-export function PubblicaTab() {
+interface PubblicaTabProps {
+  onNavigateToMieiLift?: () => void;
+}
+
+export function PubblicaTab({ onNavigateToMieiLift }: PubblicaTabProps = {}) {
   const [selectedCategory, setSelectedCategory] = useState<TaskCategory | null>(null);
   const [customTitle, setCustomTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -427,6 +431,13 @@ export function PubblicaTab() {
     setIsSosMode(false);
     map.current?.remove();
     map.current = null;
+
+    // Navigate to Miei Lift tab to show the published task
+    if (onNavigateToMieiLift) {
+      setTimeout(() => {
+        onNavigateToMieiLift();
+      }, 500);
+    }
   };
 
   const totalPrice = budget ? parseFloat(budget) : 0;

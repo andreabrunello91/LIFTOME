@@ -265,6 +265,9 @@ export type Database = {
           is_scheduled: boolean
           is_sos: boolean
           lifter_id: string | null
+          lifter_location_lat: number | null
+          lifter_location_lng: number | null
+          lifter_location_updated_at: string | null
           location_address: string | null
           location_lat: number | null
           location_lng: number | null
@@ -285,6 +288,9 @@ export type Database = {
           is_scheduled?: boolean
           is_sos?: boolean
           lifter_id?: string | null
+          lifter_location_lat?: number | null
+          lifter_location_lng?: number | null
+          lifter_location_updated_at?: string | null
           location_address?: string | null
           location_lat?: number | null
           location_lng?: number | null
@@ -305,6 +311,9 @@ export type Database = {
           is_scheduled?: boolean
           is_sos?: boolean
           lifter_id?: string | null
+          lifter_location_lat?: number | null
+          lifter_location_lng?: number | null
+          lifter_location_updated_at?: string | null
           location_address?: string | null
           location_lat?: number | null
           location_lng?: number | null
@@ -368,6 +377,8 @@ export type Database = {
           full_name: string
           is_available: boolean
           is_kyc_verified: boolean
+          location_lat: number
+          location_lng: number
           rating: number
           skills: string[]
           total_reviews: number

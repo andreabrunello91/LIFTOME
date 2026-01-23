@@ -172,12 +172,16 @@ const Index = () => {
     });
   }, [toast]);
 
+  const handleNavigateToMieiLift = useCallback(() => {
+    setActiveTab("miei-lift");
+  }, []);
+
   const renderActiveTab = () => {
     switch (activeTab) {
       case "guadagna":
         return <GuadagnaTab />;
       case "pubblica":
-        return <PubblicaTab />;
+        return <PubblicaTab onNavigateToMieiLift={handleNavigateToMieiLift} />;
       case "miei-lift":
         return <MieiLiftTab onOpenChat={handleOpenChat} />;
       case "profilo":

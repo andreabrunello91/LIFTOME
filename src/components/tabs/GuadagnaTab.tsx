@@ -194,11 +194,8 @@ export const GuadagnaTab = forwardRef<HTMLDivElement>(function GuadagnaTab(_prop
     };
 
     setAcceptedTask(transformed);
-    // Only switch to accepted view if we're in list mode
-    if (viewMode === "list") {
-      setViewMode("accepted");
-    }
-  }, [currentUserId, userPosition, viewMode]);
+    // DON'T auto-switch viewMode - let user navigate manually
+  }, [currentUserId, userPosition]);
 
   useEffect(() => {
     checkActiveOraTask();
@@ -350,29 +347,73 @@ export const GuadagnaTab = forwardRef<HTMLDivElement>(function GuadagnaTab(_prop
     }
   }, [userPosition, currentUserId]);
 
-  // Get user location
+  // Get user location and update task with lifter position when active
   useEffect(() => {
-    if ("geolocation" in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          setUserPosition({
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-          });
-          setIsLocating(false);
-        },
-        () => {
-          setIsLocating(false);
-          // Default to Rome if geolocation fails
-          setUserPosition({ lat: 41.9028, lng: 12.4964 });
-        },
-        { enableHighAccuracy: true, timeout: 10000 }
-      );
-    } else {
+    if (!("geolocation" in navigator)) {
       setIsLocating(false);
       setUserPosition({ lat: 41.9028, lng: 12.4964 });
+      return;
     }
-  }, []);
+
+    // Update lifter position directly on the task (client can read it via RLS)
+    const updatePositionOnTask = async (lat: number, lng: number) => {
+      if (!acceptedTask?.id) return;
+      
+      try {
+        await supabase
+          .from('tasks')
+          .update({ 
+            lifter_location_lat: lat, 
+            lifter_location_lng: lng,
+            lifter_location_updated_at: new Date().toISOString()
+          } as any)
+          .eq('id', acceptedTask.id);
+      } catch (err) {
+        console.error('Failed to update lifter position on task:', err);
+      }
+    };
+
+    const onSuccess = (position: GeolocationPosition) => {
+      const newPos = {
+        lat: position.coords.latitude,
+        lng: position.coords.longitude,
+      };
+      setUserPosition(newPos);
+      setIsLocating(false);
+      
+      // Update task with lifter position when active
+      if (acceptedTask) {
+        updatePositionOnTask(newPos.lat, newPos.lng);
+      }
+    };
+
+    const onError = () => {
+      setIsLocating(false);
+      setUserPosition({ lat: 41.9028, lng: 12.4964 });
+    };
+
+    // Initial position
+    navigator.geolocation.getCurrentPosition(onSuccess, onError, {
+      enableHighAccuracy: true,
+      timeout: 10000,
+    });
+
+    // Watch position continuously when lifter has active task
+    let watchId: number | null = null;
+    if (acceptedTask) {
+      watchId = navigator.geolocation.watchPosition(onSuccess, () => {}, {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 3000, // Update every 3 seconds max
+      });
+    }
+
+    return () => {
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+    };
+  }, [acceptedTask?.id]);
 
   // Fetch tasks when position or user changes
   useEffect(() => {
