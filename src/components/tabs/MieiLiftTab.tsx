@@ -125,6 +125,7 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
   const [selectedTaskForProposals, setSelectedTaskForProposals] = useState<DBTask | null>(null);
   const [assignedLifterProfile, setAssignedLifterProfile] = useState<LifterProfile | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [currentUserName, setCurrentUserName] = useState<string>("Cliente");
   
   const [routeInfo, setRouteInfo] = useState<{ distance: string; duration: string } | null>(null);
   const [lifterPosition, setLifterPosition] = useState<{ lat: number; lng: number } | null>(null);
@@ -166,6 +167,12 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
       return;
     }
     setCurrentUserId(user.id);
+
+    // Fetch current user's profile name for notifications
+    const { data: myProfile } = await supabase.rpc('get_public_profile', { profile_user_id: user.id });
+    if (myProfile && myProfile.length > 0) {
+      setCurrentUserName(myProfile[0].full_name || 'Cliente');
+    }
 
     // Fetch tasks
     const { data: tasksData, error: tasksError } = await supabase
@@ -1097,10 +1104,10 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
       const lifterName = publicLifter?.full_name || 'Lifter';
       const task = tasks.find(t => t.id === application.task_id);
 
-      // Send REAL push notification to the Lifter
-      await notificationService.notifyTaskAccepted(
+      // Send push notification to the Lifter that they've been assigned
+      await notificationService.notifyLifterAssigned(
         application.lifter_id,
-        lifterName,
+        currentUserName,
         task?.title || 'Task'
       );
 

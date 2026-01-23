@@ -10,7 +10,7 @@ const ONESIGNAL_APP_ID = Deno.env.get('ONESIGNAL_APP_ID');
 const ONESIGNAL_REST_API_KEY = Deno.env.get('ONESIGNAL_REST_API_KEY');
 
 interface PushNotificationRequest {
-  type: 'new_task_nearby' | 'task_accepted' | 'new_message' | 'lifter_arriving' | 'task_completed' | 'tip_received' | 'referral_completed';
+  type: 'new_task_nearby' | 'task_accepted' | 'lifter_assigned' | 'new_message' | 'lifter_arriving' | 'task_completed' | 'tip_received' | 'referral_completed';
   title: string;
   message: string;
   targetUserId?: string; // Specific user

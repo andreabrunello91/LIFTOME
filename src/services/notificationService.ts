@@ -6,6 +6,7 @@ import { supabase } from "@/integrations/supabase/client";
 export type NotificationType = 
   | 'new_task_nearby'
   | 'task_accepted'
+  | 'lifter_assigned'
   | 'new_message'
   | 'lifter_arriving'
   | 'task_completed'
@@ -383,6 +384,26 @@ class NotificationService {
     await this.sendPushNotification({
       ...notification,
       targetUserId: clientUserId,
+    });
+  }
+
+  // Notify Lifter that they have been assigned to a task by the client
+  async notifyLifterAssigned(lifterUserId: string, clientName: string, taskTitle: string): Promise<void> {
+    const notification: NotificationData = {
+      type: 'lifter_assigned',
+      title: '🎉 Sei stato scelto!',
+      message: `${clientName} ti ha assegnato il task "${taskTitle}" – Apri la mappa!`,
+      url: '/app?tab=guadagna',
+      data: { clientName, taskTitle, openMap: true },
+    };
+
+    // Show in-app notification
+    this.showLocalNotification(notification);
+
+    // Send push notification
+    await this.sendPushNotification({
+      ...notification,
+      targetUserId: lifterUserId,
     });
   }
 

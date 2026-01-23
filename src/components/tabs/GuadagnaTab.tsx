@@ -203,6 +203,47 @@ export const GuadagnaTab = forwardRef<HTMLDivElement>(function GuadagnaTab(_prop
     fetchMyActiveTask();
   }, [checkActiveOraTask, checkActiveClientTask, fetchMyActiveTask]);
 
+  // When a client accepts a task, automatically open the active task view for the lifter
+  // (unless the lifter is already in chat).
+  useEffect(() => {
+    if (acceptedTask && viewMode === "list") {
+      setViewMode("accepted");
+    }
+  }, [acceptedTask?.id, viewMode]);
+
+  // Listen for in-app notifications (lifter_assigned) to show toast with "Apri mappa" button
+  useEffect(() => {
+    const handleNotification = (data: { type: string; title: string; message: string; data?: Record<string, unknown> }) => {
+      if (data.type === 'lifter_assigned') {
+        // Show toast with action button
+        toast({
+          title: data.title,
+          description: data.message,
+          action: (
+            <button
+              onClick={() => {
+                fetchMyActiveTask();
+                setViewMode("accepted");
+              }}
+              className="bg-primary text-primary-foreground px-3 py-1.5 rounded-lg text-sm font-semibold whitespace-nowrap"
+            >
+              Apri mappa
+            </button>
+          ),
+          duration: 10000, // Keep visible for 10 seconds
+        });
+        // Also refresh the active task
+        fetchMyActiveTask();
+      }
+    };
+
+    notificationService.setNotificationCallback(handleNotification);
+
+    return () => {
+      notificationService.setNotificationCallback(() => {});
+    };
+  }, [fetchMyActiveTask]);
+
   // Fetch unread messages count for accepted task
   useEffect(() => {
     const fetchUnreadCount = async () => {
