@@ -1,12 +1,9 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { Send, ChevronLeft, CheckCheck, Mic, MicOff, Phone, MoreVertical } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Task } from "@/components/TaskCard";
-import { ArrowLeft, Send, Mic, MicOff, MoreVertical, CheckCheck, Star } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
-import { useToast } from "@/hooks/use-toast";
-import { notificationService } from "@/services/notificationService";
 
 interface Message {
   id: string;
@@ -14,296 +11,248 @@ interface Message {
   sender_id: string;
   created_at: string;
   is_read: boolean;
-  is_audio?: boolean;
+}
+
+interface Task {
+  id: string;
+  title: string;
+  emoji: string;
+  price: number;
+  clientName: string;
+  clientAvatar?: string;
+  status?: string;
+  category?: string;
 }
 
 interface ChatViewProps {
   task: Task;
+  currentUserId: string;
+  taskId: string;
   onBack: () => void;
-  currentUserId?: string;
-  taskId?: string;
 }
 
-export function ChatView({ task, onBack, currentUserId, taskId }: ChatViewProps) {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [newMessage, setNewMessage] = useState("");
-  const [isTyping, setIsTyping] = useState(false);
+const QUICK_REPLIES = [
+  "Ok, arrivo subito! 👍",
+  "Suona al citofono",
+  "Grazie mille! 😊",
+  "Lascia fuori dalla porta",
+  "Ci vediamo tra 5 min",
+];
+
+const STATUS_COLORS: Record<string, { bg: string; border: string; text: string; dot: string }> = {
+  accepted:    { bg: "bg-orange-50",  border: "border-orange-200", text: "text-orange-800", dot: "bg-orange-500" },
+  in_progress: { bg: "bg-blue-50",    border: "border-blue-200",   text: "text-blue-800",   dot: "bg-blue-500"   },
+  completed:   { bg: "bg-green-50",   border: "border-green-200",  text: "text-green-800",  dot: "bg-green-500"  },
+  default:     { bg: "bg-gray-50",    border: "border-gray-200",   text: "text-gray-800",   dot: "bg-gray-400"   },
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  accepted: "Accettata",
+  in_progress: "In corso",
+  completed: "Completata",
+  pending: "In attesa",
+};
+
+function getInitials(name: string) {
+  return name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2);
+}
+
+function AvatarBubble({ name, size = "sm" }: { name: string; size?: "sm" | "md" }) {
+  const colors = ["bg-violet-500","bg-emerald-500","bg-rose-500","bg-amber-500","bg-sky-500","bg-indigo-500"];
+  const idx = name.charCodeAt(0) % colors.length;
+  const sz = size === "sm" ? "w-7 h-7 text-[10px]" : "w-9 h-9 text-[12px]";
+  return (
+    <div className={cn("rounded-full flex items-center justify-center font-bold text-white flex-shrink-0", colors[idx], sz)}>
+      {getInitials(name)}
+    </div>
+  );
+}
+
+export function ChatView({ task, currentUserId, taskId, onBack }: ChatViewProps) {
+  const [messages, setMessages]       = useState<Message[]>([]);
+  const [newMessage, setNewMessage]   = useState("");
+  const [isTyping, setIsTyping]       = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [showQR, setShowQR]           = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { toast } = useToast();
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
+  const statusStyle = STATUS_COLORS[task.status ?? "default"] ?? STATUS_COLORS.default;
 
-  // Fetch messages from database
+  const scrollToBottom = () => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+
   const fetchMessages = useCallback(async () => {
-    if (!taskId) {
-      setIsLoading(false);
-      return;
-    }
-
     try {
       const { data, error } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('task_id', taskId)
-        .order('created_at', { ascending: true });
-
-      if (error) {
-        console.error('Error fetching messages:', error);
-        return;
-      }
-
-      setMessages(data || []);
+        .from("messages")
+        .select("*")
+        .eq("task_id", taskId)
+        .order("created_at", { ascending: true });
+      if (!error) setMessages(data || []);
     } catch (err) {
-      console.error('Error in fetchMessages:', err);
-    } finally {
-      setIsLoading(false);
+      console.error("Error fetching messages:", err);
     }
   }, [taskId]);
 
-  useEffect(() => {
-    fetchMessages();
-  }, [fetchMessages]);
+  useEffect(() => { fetchMessages(); }, [fetchMessages]);
 
-  // Real-time subscription for messages
   useEffect(() => {
-    if (!taskId) return;
-
     const channel = supabase
       .channel(`messages-${taskId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'messages',
-          filter: `task_id=eq.${taskId}`,
-        },
-        (payload) => {
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: `task_id=eq.${taskId}` },
+        payload => {
           const newMsg = payload.new as Message;
-          setMessages(prev => {
-            // Avoid duplicates
-            if (prev.find(m => m.id === newMsg.id)) return prev;
-            return [...prev, newMsg];
-          });
-        }
-      )
+          setMessages(prev => prev.some(m => m.id === newMsg.id) ? prev : [...prev, newMsg]);
+          if (newMsg.sender_id !== currentUserId) {
+            setIsTyping(false);
+            setShowQR(true);
+          }
+        })
       .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [taskId, currentUserId]);
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [taskId]);
+  useEffect(() => { scrollToBottom(); }, [messages]);
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
-
-  const handleSend = async () => {
-    if (!newMessage.trim() || !currentUserId || !taskId) return;
-
-    const messageContent = newMessage.trim();
+  async function sendMessage(text?: string) {
+    const content = (text ?? newMessage).trim();
+    if (!content || !currentUserId) return;
     setNewMessage("");
-
+    setShowQR(false);
     try {
-      const { error } = await supabase
-        .from('messages')
-        .insert({
-          task_id: taskId,
-          sender_id: currentUserId,
-          content: messageContent,
-          is_read: false,
-        });
-
-      if (error) {
-        console.error('Error sending message:', error);
-        toast({
-          title: "Errore",
-          description: "Impossibile inviare il messaggio",
-          variant: "destructive",
-        });
-        setNewMessage(messageContent);
-        return;
-      }
-
-      // Send push notification to recipient (other person in chat)
-      // Note: We need the task's client_id and lifter_id from the task prop
-      const recipientId = currentUserId === (task as any).client_id 
-        ? (task as any).lifter_id 
-        : (task as any).client_id;
-      
-      if (recipientId) {
-        notificationService.notifyNewMessage(recipientId, task.clientName || "Utente", taskId);
-      }
+      await supabase.from("messages").insert({ task_id: taskId, sender_id: currentUserId, content, is_read: false });
     } catch (err) {
-      console.error('Error in handleSend:', err);
+      console.error("Error sending message:", err);
     }
-  };
-
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  };
-
-  const toggleRecording = () => {
-    setIsRecording(!isRecording);
-    toast({
-      title: isRecording ? "Registrazione fermata" : "Registrazione avviata 🎙️",
-      description: isRecording ? "Audio non ancora supportato" : "Tieni premuto per registrare",
-    });
-  };
-
-  const formatTime = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
-  };
+  }
 
   return (
-    <div className="flex flex-col h-full bg-background">
-      {/* Header */}
-      <div className="bg-card border-b border-border px-4 py-3 flex items-center gap-3 sticky top-0 z-10">
-        <button onClick={onBack} className="p-1">
-          <ArrowLeft className="w-5 h-5 text-foreground" />
+    <div className="flex flex-col h-full bg-[#F7F6F2]">
+
+      {/* ── Header ── */}
+      <div className="bg-white px-3 pt-3 pb-3 border-b border-gray-100 flex items-center gap-2.5 shadow-sm">
+        <button onClick={onBack} className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0">
+          <ChevronLeft className="w-5 h-5 text-gray-700" />
         </button>
-        
-        <div className="w-10 h-10 rounded-full bg-muted overflow-hidden border-2 border-primary">
-          {task.clientAvatar ? (
-            <img src={task.clientAvatar} alt={task.clientName} className="w-full h-full object-cover" />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center text-lg">
-              {task.emoji}
-            </div>
-          )}
-        </div>
-        
-        <div className="flex-1">
-          <h3 className="font-semibold text-foreground">{task.clientName}</h3>
-          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-            {isTyping ? (
-              <span className="text-primary animate-pulse">sta scrivendo...</span>
-            ) : (
-              <>
-                <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
-                <span>{task.rating?.toFixed(1) || "4.8"}</span>
-                <span>• Online</span>
-              </>
-            )}
+        <AvatarBubble name={task.clientName} size="md" />
+        <div className="flex-1 min-w-0">
+          <h3 className="font-black text-[15px] text-gray-900 tracking-tight truncate">{task.clientName}</h3>
+          <div className="flex items-center gap-1.5 mt-0.5">
+            <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
+            <span className="text-[12px] font-semibold text-green-600">Online</span>
           </div>
         </div>
-
-        <button className="p-2 rounded-full hover:bg-muted">
-          <MoreVertical className="w-5 h-5 text-muted-foreground" />
-        </button>
+        <div className="flex gap-1.5">
+          <button className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center">
+            <Phone className="w-4 h-4 text-gray-600" />
+          </button>
+          <button className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center">
+            <MoreVertical className="w-4 h-4 text-gray-600" />
+          </button>
+        </div>
       </div>
 
-      {/* Task Info Banner */}
-      <div className="bg-primary/10 px-4 py-2 flex items-center gap-2">
-        <span className="text-lg">{task.emoji}</span>
-        <span className="text-sm font-medium text-foreground">{task.title}</span>
-        <span className="text-sm text-primary font-bold ml-auto">{task.price}€</span>
-      </div>
-
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
-        {isLoading ? (
-          <div className="flex items-center justify-center py-12">
-            <span className="text-4xl animate-bounce">💬</span>
+      {/* ── Mission strip ── */}
+      <div className={cn("flex items-center justify-between px-3.5 py-2.5 border-b", statusStyle.bg, statusStyle.border)}>
+        <div className="flex items-center gap-2">
+          <span className="text-lg">{task.emoji}</span>
+          <div>
+            <div className={cn("text-[13px] font-black truncate max-w-[180px]", statusStyle.text)}>{task.title}</div>
+            <div className={cn("text-[11px] font-medium", statusStyle.text, "opacity-70")}>€ {task.price}</div>
           </div>
-        ) : messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12 text-center">
-            <span className="text-4xl mb-3">👋</span>
-            <p className="text-muted-foreground text-sm">
-              Inizia la conversazione con {task.clientName}
-            </p>
+        </div>
+        <div className={cn("flex items-center gap-1.5 text-[12px] font-bold", statusStyle.text)}>
+          <span className={cn("w-2 h-2 rounded-full", statusStyle.dot)} />
+          {STATUS_LABELS[task.status ?? ""] ?? "Attiva"}
+        </div>
+      </div>
+
+      {/* ── Messages ── */}
+      <div className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-1.5">
+        {messages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <span className="text-5xl mb-4">👋</span>
+            <p className="text-[15px] font-bold text-gray-700 mb-1">Inizia la conversazione</p>
+            <p className="text-[13px] text-gray-400">Scrivi un messaggio a {task.clientName}</p>
           </div>
         ) : (
-          messages.map((message) => {
-            const isOwn = message.sender_id === currentUserId;
+          messages.map(msg => {
+            const isOwn = msg.sender_id === currentUserId;
             return (
-              <div
-                key={message.id}
-                className={cn("flex", isOwn ? "justify-end" : "justify-start")}
-              >
-                <div
-                  className={cn(
-                    "max-w-[75%] rounded-2xl px-4 py-2.5 shadow-sm",
-                    isOwn
-                      ? "bg-primary text-primary-foreground rounded-br-sm"
-                      : "bg-card text-foreground rounded-bl-sm"
-                  )}
-                >
-                  <p className="text-sm">{message.content}</p>
+              <div key={msg.id} className={cn("flex items-end gap-2", isOwn ? "justify-end" : "justify-start")}>
+                {!isOwn && <AvatarBubble name={task.clientName} size="sm" />}
+                <div className={cn("max-w-[75%] flex flex-col", isOwn ? "items-end" : "items-start")}>
                   <div className={cn(
-                    "flex items-center gap-1 mt-1",
-                    isOwn ? "justify-end" : "justify-start"
+                    "px-3.5 py-2.5 rounded-[18px] text-[14px] leading-relaxed",
+                    isOwn
+                      ? "bg-[#FF5A00] text-white rounded-br-[5px]"
+                      : "bg-white text-gray-900 border border-gray-100 rounded-bl-[5px]"
                   )}>
-                    <span className={cn(
-                      "text-[10px]",
-                      isOwn ? "text-primary-foreground/70" : "text-muted-foreground"
-                    )}>
-                      {formatTime(message.created_at)}
+                    {msg.content}
+                  </div>
+                  <div className={cn("flex items-center gap-1 mt-1 px-1", isOwn ? "flex-row-reverse" : "")}>
+                    <span className="text-[11px] text-gray-400">
+                      {new Date(msg.created_at).toLocaleTimeString("it", { hour: "2-digit", minute: "2-digit" })}
                     </span>
-                    {isOwn && message.is_read && (
-                      <CheckCheck className="w-3.5 h-3.5 text-primary-foreground/70" />
-                    )}
+                    {isOwn && <CheckCheck className="w-3.5 h-3.5 text-[#FF5A00]" />}
                   </div>
                 </div>
               </div>
             );
           })
         )}
-        
+
+        {/* Typing indicator */}
         {isTyping && (
-          <div className="flex justify-start">
-            <div className="bg-card rounded-2xl px-4 py-3 rounded-bl-sm">
+          <div className="flex justify-start items-end gap-2">
+            <AvatarBubble name={task.clientName} size="sm" />
+            <div className="bg-white border border-gray-100 rounded-[18px] rounded-bl-[5px] px-4 py-3">
               <div className="flex gap-1">
-                <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                {[0, 150, 300].map(delay => (
+                  <span key={delay} className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: `${delay}ms` }} />
+                ))}
               </div>
             </div>
           </div>
         )}
-        
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input Area */}
-      <div className="bg-card border-t border-border px-4 py-3 pb-safe">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={toggleRecording}
-            className={cn(
-              "p-3 rounded-full transition-colors",
-              isRecording ? "bg-red-500 text-white" : "bg-muted text-muted-foreground hover:bg-muted/80"
-            )}
-          >
-            {isRecording ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-          </button>
-          
-          <Input
-            value={newMessage}
-            onChange={(e) => setNewMessage(e.target.value)}
-            onKeyPress={handleKeyPress}
-            placeholder="Scrivi un messaggio..."
-            className="flex-1 rounded-full bg-muted border-0 h-11"
-          />
-          
-          <Button
-            onClick={handleSend}
-            disabled={!newMessage.trim()}
-            variant="cta"
-            size="icon"
-            className="rounded-full h-11 w-11"
-          >
-            <Send className="w-5 h-5" />
-          </Button>
+      {/* ── Quick replies ── */}
+      {showQR && messages.length > 0 && (
+        <div className="flex gap-2 overflow-x-auto px-3 py-2 bg-[#F7F6F2] border-t border-gray-100 no-scrollbar">
+          {QUICK_REPLIES.map(qr => (
+            <button key={qr}
+              className="flex-shrink-0 px-3.5 py-2 bg-white border-[1.5px] border-gray-200 rounded-full text-[13px] font-semibold text-gray-800 whitespace-nowrap active:bg-orange-50 active:border-orange-200 active:text-orange-800 transition-all"
+              onClick={() => sendMessage(qr)}>
+              {qr}
+            </button>
+          ))}
         </div>
+      )}
+
+      {/* ── Input bar ── */}
+      <div className="bg-white border-t border-gray-100 px-3 py-2.5 flex items-center gap-2 pb-safe">
+        <button
+          className={cn("w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 transition-colors",
+            isRecording ? "bg-red-500 text-white" : "bg-gray-100 text-gray-500")}
+          onClick={() => setIsRecording(r => !r)}>
+          {isRecording ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+        </button>
+
+        <Input
+          value={newMessage}
+          onChange={e => setNewMessage(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && !e.shiftKey && sendMessage()}
+          placeholder="Scrivi un messaggio..."
+          className="flex-1 rounded-full bg-gray-100 border-0 h-10 px-4 text-[14px]"
+        />
+
+        <Button
+          size="icon"
+          className="rounded-full h-10 w-10 bg-[#FF5A00] hover:bg-[#E04D00] flex-shrink-0"
+          onClick={() => sendMessage()}>
+          <Send className="w-4 h-4" />
+        </Button>
       </div>
     </div>
   );
