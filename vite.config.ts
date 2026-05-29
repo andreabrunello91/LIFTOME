@@ -1,54 +1,33 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "path";
-import { componentTagger } from "lovable-tagger";
 import { VitePWA } from "vite-plugin-pwa";
 
-// https://vitejs.dev/config/
-export default defineConfig(({ mode }) => ({
-  server: {
-    host: "::",
-    port: 8080,
-  },
+export default defineConfig({
+  server: { host: "::", port: 8080 },
   plugins: [
     react(),
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["liftome-icon-192.png", "liftome-icon-512.png"],
-      workbox: {
-        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5 MB
-      },
+      workbox: { maximumFileSizeToCacheInBytes: 5 * 1024 * 1024 },
       manifest: {
         name: "Liftome",
         short_name: "Liftome",
         description: "Aiuto vicino in 10 minuti",
-        start_url: "/app",
-        scope: "/",
+        start_url: "/",
         display: "standalone",
-        background_color: "#FFFFFF",
+        background_color: "#1A1A2E",
         theme_color: "#FF5A00",
-        orientation: "portrait",
         icons: [
-          {
-            src: "/liftome-icon-192.png",
-            sizes: "192x192",
-            type: "image/png",
-          },
-          {
-            src: "/liftome-icon-512.png",
-            sizes: "512x512",
-            type: "image/png",
-          },
-        ],
-        categories: ["lifestyle", "utilities"],
-        lang: "it",
-      },
+          { src: "/liftome-icon-192.png", sizes: "192x192", type: "image/png" },
+          { src: "/liftome-icon-512.png", sizes: "512x512", type: "image/png" }
+        ]
+      }
     }),
-    mode === "development" && componentTagger(),
-  ].filter(Boolean),
-  resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
-    },
-  },
-}));
+  ],
+  resolve: { alias: { "@": path.resolve(__dirname, "./src") } },
+  define: {
+    'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(process.env.VITE_SUPABASE_URL),
+    'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(process.env.VITE_SUPABASE_ANON_KEY),
+  }
+});
