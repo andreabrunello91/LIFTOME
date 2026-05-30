@@ -1,14 +1,25 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://aguvjpqiqcsoeyyrmeix.supabase.co';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFndXZqcHFpcWNzb2V5eXJtZWl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwMzkwNTMsImV4cCI6MjA5NTYxNTA1M30.zdYd0rym9JlIRL69dMSos-Gq1fIsMzUihvBCpjy1SiY';
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-  },
-});
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.warn('⚠️  Supabase env vars missing — set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env');
+}
+
+export const supabase = createClient(
+  supabaseUrl  || 'https://placeholder.supabase.co',
+  supabaseAnonKey || 'placeholder-key',
+  {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+    },
+    realtime: {
+      params: { eventsPerSecond: 10 },
+    },
+  }
+);
 
 export default supabase;
