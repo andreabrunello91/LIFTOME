@@ -445,7 +445,7 @@ export const GuadagnaTab = forwardRef<HTMLDivElement>(function GuadagnaTab(_prop
       watchId = navigator.geolocation.watchPosition(onSuccess, () => {}, {
         enableHighAccuracy: true,
         timeout: 10000,
-        maximumAge: 3000, // Update every 3 seconds max
+        maximumAge: 0,
       });
     }
 
