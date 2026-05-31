@@ -128,6 +128,9 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
   const [currentUserName, setCurrentUserName] = useState<string>("Cliente");
   
   const [routeInfo, setRouteInfo] = useState<{ distance: string; duration: string } | null>(null);
+  const [countdownSecs, setCountdownSecs] = useState<number | null>(null);
+  const countdownRef = useRef<NodeJS.Timeout | null>(null);
+
   const [lifterPosition, setLifterPosition] = useState<{ lat: number; lng: number } | null>(null);
   
   // Completion flow states
@@ -1767,7 +1770,7 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
                 </div>
                 <div>
                   <p className="font-bold text-foreground text-sm">{assignedLifterProfile.full_name}</p>
-                  <p className="text-xs text-green-600">In arrivo • {routeInfo?.duration || '...'}</p>
+                  <p className="text-xs text-green-600"><span>In arrivo • </span><span className="font-black text-green-700">{countdownSecs !== null ? `${Math.floor(countdownSecs/60)}:${String(countdownSecs%60).padStart(2,"0")}` : routeInfo?.duration || "..."}</span></p>
                 </div>
               </div>
               <div className="flex gap-2">
@@ -1821,6 +1824,28 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
                   <span className="text-2xl font-bold text-primary">{activeTask.published_price}€</span>
                 </div>
               </div>
+
+              {/* Countdown ETA */}
+              {(countdownSecs !== null || routeInfo) && (
+                <div className="bg-green-50 border border-green-200 rounded-2xl p-4 mb-4 flex items-center justify-between">
+                  <div>
+                    <div className="text-xs font-semibold text-green-600 uppercase tracking-wide mb-1">Arrivo stimato</div>
+                    <div className="text-3xl font-black text-green-700 tracking-tight">
+                      {countdownSecs !== null
+                        ? `${Math.floor(countdownSecs/60)}:${String(countdownSecs%60).padStart(2,"0")}`
+                        : routeInfo?.duration || "..."}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xs font-semibold text-green-600 uppercase tracking-wide mb-1">Distanza</div>
+                    <div className="text-xl font-black text-green-700">{routeInfo?.distance || "..."}</div>
+                  </div>
+                  <div className="w-12 h-12 rounded-full bg-green-500 flex items-center justify-center ml-2">
+                    <span className="text-2xl">🛵</span>
+                  </div>
+                </div>
+              )}
+
 
               {/* Task info */}
               <div className="bg-muted/50 rounded-xl p-3 mb-4">
