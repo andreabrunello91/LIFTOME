@@ -206,8 +206,8 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
     const { data: appsData, error: appsError } = await supabase
       .from('task_applications')
       .select('*')
-      .eq('status', 'pending');
-
+      .eq('status', 'pending')
+      .in('task_id', tasks.map(t => t.id));
     if (appsError) {
       console.error('Error fetching applications:', appsError);
     } else if (appsData && appsData.length > 0) {
