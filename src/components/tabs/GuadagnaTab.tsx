@@ -10,7 +10,7 @@ import { supabase } from "@/integrations/supabase/client";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 
-const MAPBOX_TOKEN = "pk.eyJ1IjoiYnJ1bmUyMiIsImEiOiJjbWo4Yms2bGQwMHAzM2RyMDlhamxidmFvIn0.I9xGBb5ZCgFC5KtahiI3sA";
+const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 const RADIUS_KM = 50; // 1km radius
 
 type FilterType = "in-corso" | "programmati";
