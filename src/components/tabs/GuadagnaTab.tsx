@@ -456,6 +456,25 @@ setIsLocating(false);
     };
   }, [acceptedTask?.id]);
 
+  // Send position immediately when task is accepted
+  useEffect(() => {
+    if (!acceptedTask?.id) return;
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          await supabase.from("tasks").update({
+            lifter_location_lat: pos.coords.latitude,
+            lifter_location_lng: pos.coords.longitude,
+            lifter_location_updated_at: new Date().toISOString(),
+          }).eq("id", acceptedTask.id);
+        } catch (e) { console.error(e); }
+      },
+      () => {},
+      { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+    );
+  }, [acceptedTask?.id]);
+
+
   // Fetch tasks when position or user changes
   useEffect(() => {
     if (userPosition && currentUserId) {
