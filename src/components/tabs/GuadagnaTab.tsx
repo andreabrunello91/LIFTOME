@@ -71,7 +71,7 @@ const categoryEmojis: Record<string, string> = {
   "babysitting": "👶",
   "dogsitting": "🐕",
   "accompagnamento": "🚗",
-};
+    };
 
 export const GuadagnaTab = forwardRef<HTMLDivElement>(function GuadagnaTab(_props, ref) {
   const [filter, setFilter] = useState<FilterType>("in-corso");
@@ -420,7 +420,8 @@ export const GuadagnaTab = forwardRef<HTMLDivElement>(function GuadagnaTab(_prop
         lng: position.coords.longitude,
       };
       setUserPosition(newPos);
-      setIsLocating(false);
+      
+setIsLocating(false);
       
       // Update task with lifter position when active
       if (acceptedTask) {
@@ -430,6 +431,7 @@ export const GuadagnaTab = forwardRef<HTMLDivElement>(function GuadagnaTab(_prop
 
     const onError = () => {
       setIsLocating(false);
+    };
 
     // Initial position
     navigator.geolocation.getCurrentPosition(onSuccess, onError, {
