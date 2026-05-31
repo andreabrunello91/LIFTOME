@@ -430,8 +430,6 @@ export const GuadagnaTab = forwardRef<HTMLDivElement>(function GuadagnaTab(_prop
 
     const onError = () => {
       setIsLocating(false);
-      setUserPosition({ lat: 41.9028, lng: 12.4964 });
-    };
 
     // Initial position
     navigator.geolocation.getCurrentPosition(onSuccess, onError, {
