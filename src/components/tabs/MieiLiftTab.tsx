@@ -1519,7 +1519,7 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
               );
               
               return (
-                <div key={app.id} className="bg-card rounded-2xl p-4 shadow-card border border-border">
+                <div key={app.id} className="bg-white rounded-[22px] p-4 border border-gray-100 shadow-[0_2px_12px_rgba(0,0,0,0.06)]">
                   {/* Lifter profile */}
                   <div className="flex items-start gap-4 mb-4">
                     {/* Large circular photo */}
@@ -2618,7 +2618,7 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
               return (
                 <div
                   key={task.id}
-                  className="bg-card rounded-2xl p-4 shadow-card border border-border"
+                  className="bg-white rounded-[22px] p-4 border border-gray-100 shadow-[0_2px_12px_rgba(0,0,0,0.06)]"
                 >
                   <div className="flex items-start gap-3">
                     <span className="text-3xl">{categoryEmojis[task.category] || "📍"}</span>
@@ -2643,7 +2643,7 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
                   {taskApps.length > 0 && (
                     <button
                       onClick={() => handleOpenProposals(task)}
-                      className="w-full mt-3 p-3 bg-primary/10 border border-primary/30 rounded-xl flex items-center justify-between tap-scale"
+                      className="w-full mt-3 p-3.5 bg-[#FF5A00] rounded-[14px] flex items-center justify-between active:opacity-80 transition-opacity"
                     >
                       <div className="flex items-center gap-2">
                         <span className="text-xl">📩</span>
