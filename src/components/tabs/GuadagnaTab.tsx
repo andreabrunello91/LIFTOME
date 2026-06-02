@@ -11,7 +11,7 @@ import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
-const RADIUS_KM = 50; // 1km radius
+const RADIUS_KM = 1; // 1km radius
 
 type FilterType = "in-corso" | "programmati";
 type ViewMode = "list" | "accepted" | "chat";
