@@ -207,7 +207,7 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
       .from('task_applications')
       .select('*')
       .eq('status', 'pending')
-      .in('task_id', tasks.map(t => t.id));
+      .in('task_id', tasksData?.map((t: any) => t.id) ?? []);
     if (appsError) {
       console.error('Error fetching applications:', appsError);
     } else if (appsData && appsData.length > 0) {
