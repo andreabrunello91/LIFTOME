@@ -20,14 +20,14 @@ export function Header({ activeTab = "guadagna", onOpenChat, onOpenTask }: Heade
   const tabTitle = TAB_TITLES[activeTab];
 
   return (
-    <header className="fixed top-0 left-0 right-0 h-[70px] bg-black z-50 flex items-center justify-between px-5">
+    <header className="fixed top-0 left-0 right-0 h-[70px] bg-white/95 backdrop-blur-md border-b border-gray-100 z-50 flex items-center justify-between px-5 shadow-sm">
       {showLiftome ? (
         <h1 className="text-2xl font-bold tracking-tight">
-          <span className="text-white">Lift</span>
+          <span className="text-gray-900">Lift</span>
           <span className="text-primary">ome</span>
         </h1>
       ) : (
-        <h1 className="text-2xl font-bold tracking-tight text-white">
+        <h1 className="text-2xl font-bold tracking-tight text-gray-900">
           {tabTitle}
         </h1>
       )}

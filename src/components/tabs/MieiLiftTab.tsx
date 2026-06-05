@@ -2601,12 +2601,12 @@ export const MieiLiftTab = forwardRef<HTMLDivElement, MieiLiftTabProps>(function
           )
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center px-4 text-center">
-            <span className="text-6xl mb-4">📭</span>
+            <span className="text-6xl mb-4">🚀</span>
             <h3 className="text-xl font-semibold text-foreground mb-2">
-              Nessun task in corso
+              Nessun task ancora 🚀
             </h3>
             <p className="text-muted-foreground">
-              Pubblica un task per ricevere aiuto
+              Pubblica il tuo primo task e ricevi aiuto in 10 minuti!
             </p>
           </div>
         )

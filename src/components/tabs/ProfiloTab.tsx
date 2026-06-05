@@ -766,7 +766,7 @@ export const ProfiloTab = forwardRef<HTMLDivElement>(function ProfiloTab(_props,
 
   // Main Profile Screen
   return (
-    <div ref={ref} className="flex flex-col h-full overflow-y-auto pb-28">
+    <div ref={ref} className="flex flex-col h-full overflow-y-auto pb-28"><div className="bg-gradient-to-br from-[#FF5A00] to-[#FF8C42] px-5 pt-6 pb-16 relative overflow-hidden"><div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -translate-y-8 translate-x-8" /><div className="absolute bottom-0 left-0 w-24 h-24 bg-white/10 rounded-full translate-y-8 -translate-x-8" /><p className="text-white/70 text-sm font-medium mb-1">Bentornato 👋</p><h1 className="text-white text-2xl font-black tracking-tight">Il mio profilo</h1></div><div className="px-4 -mt-10 relative z-10">
       {/* KYC Popup after first task */}
       {showKycPopup && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
@@ -1210,6 +1210,7 @@ export const ProfiloTab = forwardRef<HTMLDivElement>(function ProfiloTab(_props,
           Membro dal {joinedDate} • Liftome v1.0.0
         </p>
       </div>
+    </div>
     </div>
   );
 });
