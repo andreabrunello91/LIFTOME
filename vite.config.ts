@@ -9,7 +9,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
-      workbox: { maximumFileSizeToCacheInBytes: 5 * 1024 * 1024 },
+      workbox: { maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, skipWaiting: true, clientsClaim: true },
       manifest: {
         name: "Liftome",
         short_name: "Liftome",
